@@ -26,6 +26,14 @@ http {
             alias /app/dist/cli/;
         }
 
+        # install.sh 动态注入服务器地址
+        location = /cli/install.sh {
+            alias /app/dist/cli/install.sh;
+            sub_filter '__VIBE_SERVER__' '$scheme://$http_host';
+            sub_filter_once on;
+            sub_filter_types *;
+        }
+
         # SPA fallback
         location / {
             try_files $uri $uri/ /index.html;
