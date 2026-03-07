@@ -23,7 +23,8 @@ type Handler struct {
 	unregister chan *Client
 
 	// CLI 工作器连接
-	cliWorkers map[*Client]bool
+	cliWorkers  map[*Client]bool
+	cliRRIndex  int // 轮询索引
 }
 
 type Client struct {
@@ -100,6 +101,21 @@ func (h *Handler) sendToFrontends(message []byte) {
 			delete(h.clients, client)
 		}
 	}
+}
+
+// pickCLIWorker 轮询选择一个 CLI 工作器
+func (h *Handler) pickCLIWorker() *Client {
+	if len(h.cliWorkers) == 0 {
+		return nil
+	}
+	workers := make([]*Client, 0, len(h.cliWorkers))
+	for c := range h.cliWorkers {
+		workers = append(workers, c)
+	}
+	h.cliRRIndex = h.cliRRIndex % len(workers)
+	picked := workers[h.cliRRIndex]
+	h.cliRRIndex++
+	return picked
 }
 
 func (h *Handler) Run() {
@@ -241,12 +257,14 @@ func (h *Handler) Run() {
 				}
 				taskData, _ := json.Marshal(taskMsg)
 
-				for client := range h.cliWorkers {
+				// 轮询选择一个 CLI 工作器执行任务
+				worker := h.pickCLIWorker()
+				if worker != nil {
 					select {
-					case client.send <- taskData:
+					case worker.send <- taskData:
 					default:
-						close(client.send)
-						delete(h.cliWorkers, client)
+						close(worker.send)
+						delete(h.cliWorkers, worker)
 					}
 				}
 

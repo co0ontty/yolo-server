@@ -20,12 +20,11 @@ vibe-server
 # Go workspace file
 go.work
 
-# Node.js (copied from cli/ by build.sh)
-node_modules/
-package.json
-internal/bridge.mjs
-internal/bridge.js
-internal/executor.go
+# CLI source (copied by build.sh for Docker build)
+cli-go.mod
+cli-go.sum
+cli-cmd/
+cli-internal/
 
 # Build outputs
 dist/
