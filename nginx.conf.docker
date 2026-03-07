@@ -1,0 +1,59 @@
+# Nginx 配置 - Docker 部署
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    server {
+        listen 80;
+        server_name _;
+
+        # 前端静态文件
+        root /app/dist/web;
+        index index.html;
+
+        # 静态资源缓存
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|map)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        # CLI 下载
+        location /cli/ {
+            alias /app/dist/cli/;
+        }
+
+        # SPA fallback
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # WebSocket 代理 - 前端
+        location /ws {
+            proxy_pass http://127.0.0.1:3100;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # WebSocket 代理 - CLI
+        location /ws/cli {
+            proxy_pass http://127.0.0.1:3100;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Health check
+        location /health {
+            proxy_pass http://127.0.0.1:3100;
+        }
+    }
+}

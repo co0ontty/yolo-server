@@ -1,0 +1,13 @@
+{
+  "name": "yolo-cli-bridge",
+  "version": "1.0.0",
+  "description": "Node.js bridge for Vibe Coding CLI",
+  "main": "internal/bridge.mjs",
+  "scripts": {
+    "start": "node internal/bridge.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "type": "module"
+}

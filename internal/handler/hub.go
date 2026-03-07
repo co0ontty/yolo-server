@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -44,36 +43,112 @@ func NewHandler(filePath string) *Handler {
 	}
 }
 
+// broadcastCLIStatus 向所有前端客户端广播 CLI 工作器连接状态
+func (h *Handler) broadcastCLIStatus() {
+	status := map[string]interface{}{
+		"connected": len(h.cliWorkers) > 0,
+		"count":     len(h.cliWorkers),
+	}
+	statusJSON, _ := json.Marshal(status)
+	msg := model.Message{
+		Type:    "cli_status",
+		Content: statusJSON,
+		Time:    time.Now(),
+	}
+	data, _ := json.Marshal(msg)
+	for client := range h.clients {
+		select {
+		case client.send <- data:
+		default:
+			close(client.send)
+			delete(h.clients, client)
+		}
+	}
+}
+
+// broadcastSessions 向所有前端客户端广播会话列表
+func (h *Handler) broadcastSessions() {
+	sessions, err := h.store.GetAllSessions()
+	if err != nil {
+		log.Printf("获取会话列表失败: %v", err)
+		return
+	}
+	sessionsJSON, _ := json.Marshal(sessions)
+	msg := model.Message{
+		Type:    "sessions",
+		Content: sessionsJSON,
+		Time:    time.Now(),
+	}
+	data, _ := json.Marshal(msg)
+	for client := range h.clients {
+		select {
+		case client.send <- data:
+		default:
+			close(client.send)
+			delete(h.clients, client)
+		}
+	}
+}
+
+// sendToFrontends 向所有前端客户端发送消息
+func (h *Handler) sendToFrontends(message []byte) {
+	for client := range h.clients {
+		select {
+		case client.send <- message:
+		default:
+			close(client.send)
+			delete(h.clients, client)
+		}
+	}
+}
+
 func (h *Handler) Run() {
 	for {
 		select {
 		case client := <-h.register:
 			if client.userID == "cli" {
 				h.cliWorkers[client] = true
-				log.Println("CLI 工作器连接成功")
+				log.Printf("CLI 工作器连接成功 (当前 %d 个)", len(h.cliWorkers))
+				h.broadcastCLIStatus()
 			} else {
 				h.clients[client] = true
 				log.Println("前端客户端连接成功")
 				// 发送当前会话列表
 				if sessions, err := h.store.GetAllSessions(); err == nil {
+					sessionsJSON, _ := json.Marshal(sessions)
 					msg := model.Message{
-						Type:     "sessions",
-						Content:  sessions,
-						Time:     time.Now(),
+						Type:    "sessions",
+						Content: sessionsJSON,
+						Time:    time.Now(),
 					}
 					data, _ := json.Marshal(msg)
 					client.send <- data
 				}
+				// 发送当前 CLI 状态
+				status := map[string]interface{}{
+					"connected": len(h.cliWorkers) > 0,
+					"count":     len(h.cliWorkers),
+				}
+				statusJSON, _ := json.Marshal(status)
+				statusMsg := model.Message{
+					Type:    "cli_status",
+					Content: statusJSON,
+					Time:    time.Now(),
+				}
+				statusData, _ := json.Marshal(statusMsg)
+				client.send <- statusData
 			}
 		case client := <-h.unregister:
 			if client.userID == "cli" {
 				delete(h.cliWorkers, client)
-				log.Println("CLI 工作器断开连接")
+				log.Printf("CLI 工作器断开连接 (剩余 %d 个)", len(h.cliWorkers))
+				close(client.send)
+				h.broadcastCLIStatus()
 			} else {
 				delete(h.clients, client)
 				log.Println("前端客户端断开连接")
+				close(client.send)
 			}
-			close(client.send)
 		case message := <-h.broadcast:
 			var msg model.Message
 			if err := json.Unmarshal(message, &msg); err != nil {
@@ -82,28 +157,101 @@ func (h *Handler) Run() {
 			}
 
 			switch msg.Type {
+			case "create_session":
+				var sessionData struct {
+					Directory  string `json:"directory"`
+					Permission string `json:"permission"`
+				}
+				if err := json.Unmarshal(msg.Content, &sessionData); err != nil {
+					log.Printf("解析创建会话请求失败: %v", err)
+					continue
+				}
+				session := model.Session{
+					ID:         fmt.Sprintf("session-%d", time.Now().UnixNano()),
+					Directory:  sessionData.Directory,
+					Permission: sessionData.Permission,
+				}
+				if err := h.store.CreateSession(session); err != nil {
+					log.Printf("创建会话失败: %v", err)
+					continue
+				}
+				log.Printf("创建会话成功: %s", session.ID)
+				h.broadcastSessions()
+
+			case "delete_session":
+				var reqData struct {
+					SessionID string `json:"session_id"`
+				}
+				if err := json.Unmarshal(msg.Content, &reqData); err != nil {
+					log.Printf("解析删除会话请求失败: %v", err)
+					continue
+				}
+				if err := h.store.DeleteSession(reqData.SessionID); err != nil {
+					log.Printf("删除会话失败: %v", err)
+					continue
+				}
+				log.Printf("删除会话成功: %s", reqData.SessionID)
+				h.broadcastSessions()
+
 			case "chat":
 				if len(h.cliWorkers) == 0 {
 					log.Println("没有可用的 CLI 工作器")
-					// 发送错误消息给前端
+					errContent, _ := json.Marshal(map[string]string{
+						"type": "text",
+						"text": "错误：没有可用的 CLI 工作器，请确保 CLI 已启动并连接。",
+					})
+					// 解析 chat 内容获取 session_id
+					var chatReq model.ChatRequest
+					json.Unmarshal(msg.Content, &chatReq)
 					errMsg := model.Message{
 						Type:    "stream",
-						Content: []byte(`{"error":"没有可用的 CLI 工作器"}`),
+						Content: errContent,
+						Session: chatReq.SessionID,
 						Time:    time.Now(),
 					}
 					errData, _ := json.Marshal(errMsg)
-					for client := range h.clients {
-						select {
-						case client.send <- errData:
-						default:
-							close(client.send)
-							delete(h.clients, client)
-						}
+					h.sendToFrontends(errData)
+					// 同时发送 message_complete
+					completeMsg := model.Message{
+						Type:    "message_complete",
+						Session: chatReq.SessionID,
+						Time:    time.Now(),
 					}
+					completeData, _ := json.Marshal(completeMsg)
+					h.sendToFrontends(completeData)
 					continue
 				}
 
-				// 转发消息给 CLI 工作器
+				// 解析 chat 内容，转换为 execute_task 发给 CLI
+				var chatReq model.ChatRequest
+				if err := json.Unmarshal(msg.Content, &chatReq); err != nil {
+					log.Printf("解析聊天请求失败: %v", err)
+					continue
+				}
+
+				taskContent, _ := json.Marshal(map[string]string{
+					"session_id": chatReq.SessionID,
+					"command":    chatReq.Message,
+				})
+				taskMsg := model.Message{
+					Type:    "execute_task",
+					Content: taskContent,
+					Session: chatReq.SessionID,
+					Time:    time.Now(),
+				}
+				taskData, _ := json.Marshal(taskMsg)
+
+				for client := range h.cliWorkers {
+					select {
+					case client.send <- taskData:
+					default:
+						close(client.send)
+						delete(h.cliWorkers, client)
+					}
+				}
+
+			case "stop":
+				// 转发 stop 给 CLI 工作器
 				for client := range h.cliWorkers {
 					select {
 					case client.send <- message:
@@ -112,26 +260,14 @@ func (h *Handler) Run() {
 						delete(h.cliWorkers, client)
 					}
 				}
+
 			case "stream", "message_complete":
 				// 转发给前端
-				for client := range h.clients {
-					select {
-					case client.send <- message:
-					default:
-						close(client.send)
-						delete(h.clients, client)
-					}
-				}
+				h.sendToFrontends(message)
+
 			case "sessions":
 				// 发送会话列表给前端
-				for client := range h.clients {
-					select {
-					case client.send <- message:
-					default:
-						close(client.send)
-						delete(h.clients, client)
-					}
-				}
+				h.sendToFrontends(message)
 			}
 		}
 	}
@@ -178,9 +314,9 @@ func (h *Handler) readPump(client *Client) {
 		client.conn.Close()
 	}()
 
-	client.conn.SetReadLimit(512)
-	client.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	client.conn.SetPongHandler(func(string) error { client.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); return nil })
+	client.conn.SetReadLimit(1024 * 1024) // 1MB
+	client.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	client.conn.SetPongHandler(func(string) error { client.conn.SetReadDeadline(time.Now().Add(120 * time.Second)); return nil })
 
 	for {
 		_, message, err := client.conn.ReadMessage()
@@ -195,7 +331,7 @@ func (h *Handler) readPump(client *Client) {
 }
 
 func (h *Handler) writePump(client *Client) {
-	ticker := time.NewTicker(60 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
 		client.conn.Close()
