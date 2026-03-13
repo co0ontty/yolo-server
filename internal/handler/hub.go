@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"yolo-server/internal/auth"
 	"yolo-server/internal/model"
 	"yolo-server/internal/store"
 )
@@ -337,12 +338,50 @@ var upgrader = websocket.Upgrader{
 }
 
 func (h *Handler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
+	// 认证检查
+	authManager := auth.GetAuthManager()
+	var userID string
+	if authManager.IsEnabled() {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			// 尝试从 Authorization header 获取
+			authHeader := r.Header.Get("Authorization")
+			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+				token = authHeader[7:]
+			}
+		}
+		if token == "" {
+			// 尝试从 cookie 获取
+			cookie, err := r.Cookie("auth_token")
+			if err == nil {
+				token = cookie.Value
+			}
+		}
+		if token != "" {
+			// 验证 token，支持 URL 参数中的 token 参数（用于 WebSocket）
+			if session, valid := authManager.Validate(token); !valid {
+				log.Println("WebSocket 认证失败：无效的 token")
+				http.Error(w, "未授权", http.StatusUnauthorized)
+				return
+			} else {
+				userID = session.Username
+			}
+		} else {
+			log.Println("WebSocket 连接未提供认证 token")
+			http.Error(w, "未授权", http.StatusUnauthorized)
+			return
+		}
+	} else {
+		userID = "web"
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	client := &Client{conn: conn, send: make(chan []byte, 256), userID: "web"}
+
+	client := &Client{conn: conn, send: make(chan []byte, 256), userID: userID}
 	h.register <- client
 
 	go h.readPump(client)

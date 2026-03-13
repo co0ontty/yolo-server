@@ -1,4 +1,6 @@
 # Nginx 配置 - Docker 部署 (HTTPS)
+# 前后端分离认证 - 认证由应用层 (Go server) 负责
+
 events {
     worker_connections 1024;
 }
@@ -31,26 +33,23 @@ http {
         root /app/dist/web;
         index index.html;
 
-        # 静态资源缓存 (不需要认证)
+        # 静态资源缓存
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|map)$ {
             expires 1y;
             add_header Cache-Control "public, immutable";
-            auth_basic off;
         }
 
         # CLI 下载 (不需要认证，方便远程安装)
         location /cli/ {
             alias /app/dist/cli/;
-            auth_basic off;
         }
 
-        # SPA fallback
+        # SPA fallback - 认证由前端负责
         location / {
             try_files $uri $uri/ /index.html;
-            AUTH_BASIC_PLACEHOLDER
         }
 
-        # WebSocket 代理 - 前端
+        # WebSocket 代理 - 前端 (认证由应用层负责)
         location /ws {
             proxy_pass http://127.0.0.1:3100;
             proxy_http_version 1.1;
@@ -58,10 +57,9 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            AUTH_BASIC_PLACEHOLDER
         }
 
-        # WebSocket 代理 - CLI (不需要认证，使用 token 鉴权)
+        # WebSocket 代理 - CLI (使用 token 认证)
         location /ws/cli {
             proxy_pass http://127.0.0.1:3100;
             proxy_http_version 1.1;
@@ -69,13 +67,11 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            auth_basic off;
         }
 
         # Health check (不需要认证)
         location /health {
             proxy_pass http://127.0.0.1:3100;
-            auth_basic off;
         }
     }
 }
