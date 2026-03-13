@@ -1,4 +1,4 @@
-# Nginx 配置 - Docker 部署 (HTTPS)
+# Nginx 配置 - Docker 部署 (HTTPS) + Web 认证
 events {
     worker_connections 1024;
 }
@@ -6,6 +6,12 @@ events {
 http {
     include       /etc/nginx/mime.types;
     default_type  application/octet-stream;
+
+    # 从环境变量读取认证配置
+    map $web_auth_enabled $auth_enabled {
+        default         0;
+        "true"          1;
+    }
 
     # HTTP 重定向到 HTTPS
     server {
@@ -19,7 +25,6 @@ http {
         server_name _;
 
         # SSL 证书配置
-        # 替换以下证书文件路径为你的正式证书
         ssl_certificate /app/certs/server.crt;
         ssl_certificate_key /app/certs/server.key;
 
@@ -32,31 +37,27 @@ http {
         root /app/dist/web;
         index index.html;
 
-        # 静态资源缓存
+        # 静态资源缓存 (不需要认证)
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|map)$ {
             expires 1y;
             add_header Cache-Control "public, immutable";
+            auth_basic off;
         }
 
-        # CLI 下载
+        # CLI 下载 (不需要认证，方便远程安装)
         location /cli/ {
             alias /app/dist/cli/;
+            auth_basic off;
         }
 
-        # install.sh 动态注入服务器地址
-        location = /cli/install.sh {
-            alias /app/dist/cli/install.sh;
-            sub_filter '__VIBE_SERVER__' '$scheme://$http_host';
-            sub_filter_once on;
-            sub_filter_types *;
-        }
-
-        # SPA fallback
+        # SPA fallback - 需要认证
         location / {
             try_files $uri $uri/ /index.html;
+            auth_basic "Vibe Coding - 请输入密码";
+            auth_basic_user_file /etc/nginx/.htpasswd;
         }
 
-        # WebSocket 代理 - 前端
+        # WebSocket 代理 - 前端 (需要认证)
         location /ws {
             proxy_pass http://127.0.0.1:3100;
             proxy_http_version 1.1;
@@ -64,9 +65,11 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
+            auth_basic "Vibe Coding - 请输入密码";
+            auth_basic_user_file /etc/nginx/.htpasswd;
         }
 
-        # WebSocket 代理 - CLI
+        # WebSocket 代理 - CLI (不需要认证，使用 token 鉴权)
         location /ws/cli {
             proxy_pass http://127.0.0.1:3100;
             proxy_http_version 1.1;
@@ -74,11 +77,13 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
+            auth_basic off;
         }
 
-        # Health check
+        # Health check (不需要认证)
         location /health {
             proxy_pass http://127.0.0.1:3100;
+            auth_basic off;
         }
     }
 }

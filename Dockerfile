@@ -26,7 +26,7 @@ FROM alpine:latest
 
 WORKDIR /app
 
-RUN apk --no-cache add ca-certificates nginx
+RUN apk --no-cache add ca-certificates nginx apache2-utils
 
 # 创建目录结构
 RUN mkdir -p /app/data /app/dist/web /app/dist/cli /app/certs
