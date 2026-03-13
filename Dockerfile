@@ -1,5 +1,5 @@
-# 阶段 1: 构建 Go server（需要 Go 1.26+）
-FROM golang:1.26-alpine AS builder
+# 阶段 1: 构建 Go server（需要 Go 1.22+）
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /build/server
 
