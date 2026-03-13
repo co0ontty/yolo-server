@@ -389,6 +389,24 @@ func (h *Handler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CLIWebSocketHandler(w http.ResponseWriter, r *http.Request) {
+	// 认证检查（可选，支持 token 认证）
+	authManager := auth.GetAuthManager()
+	if authManager.IsEnabled() {
+		token := r.URL.Query().Get("token")
+		if token != "" {
+			if session, valid := authManager.Validate(token); valid {
+				log.Printf("CLI 工作器认证成功：用户 %s", session.Username)
+			} else {
+				log.Println("CLI 工作器认证失败：无效的 token")
+				http.Error(w, "未授权", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			// 如果没有提供 token，记录警告但允许连接（向后兼容）
+			log.Println("CLI 工作器连接未提供认证 token（允许连接）")
+		}
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
