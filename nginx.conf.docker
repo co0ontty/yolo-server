@@ -1,4 +1,4 @@
-# Nginx 配置 - Docker 部署 (HTTPS) + Web 认证
+# Nginx 配置 - Docker 部署 (HTTPS)
 events {
     worker_connections 1024;
 }
@@ -6,12 +6,6 @@ events {
 http {
     include       /etc/nginx/mime.types;
     default_type  application/octet-stream;
-
-    # 从环境变量读取认证配置
-    map $web_auth_enabled $auth_enabled {
-        default         0;
-        "true"          1;
-    }
 
     # HTTP 重定向到 HTTPS
     server {
@@ -50,14 +44,13 @@ http {
             auth_basic off;
         }
 
-        # SPA fallback - 需要认证
+        # SPA fallback
         location / {
             try_files $uri $uri/ /index.html;
-            auth_basic "Vibe Coding - 请输入密码";
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            AUTH_BASIC_PLACEHOLDER
         }
 
-        # WebSocket 代理 - 前端 (需要认证)
+        # WebSocket 代理 - 前端
         location /ws {
             proxy_pass http://127.0.0.1:3100;
             proxy_http_version 1.1;
@@ -65,8 +58,7 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            auth_basic "Vibe Coding - 请输入密码";
-            auth_basic_user_file /etc/nginx/.htpasswd;
+            AUTH_BASIC_PLACEHOLDER
         }
 
         # WebSocket 代理 - CLI (不需要认证，使用 token 鉴权)

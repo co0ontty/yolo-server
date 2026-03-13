@@ -6,24 +6,19 @@ if [ ! -f "/app/certs/server.crt" ] || [ ! -f "/app/certs/server.key" ]; then
     /app/gen-cert.sh
 fi
 
-# 配置 Web 认证
+# 配置 Web 认证并生成 nginx 配置
 if [ "$WEB_AUTH_ENABLED" = "true" ] && [ -n "$WEB_AUTH_PASSWORD" ]; then
     echo "启用 Web 认证..."
-    # 生成 htpasswd 文件，用户名为 admin
-    htpasswd -bc /etc/nginx/.htpasswd admin "$WEB_AUTH_PASSWORD"
-    # 如果设置了自定义用户名，使用自定义用户名
-    if [ -n "$WEB_AUTH_USER" ]; then
-        htpasswd -bc /etc/nginx/.htpasswd "$WEB_AUTH_USER" "$WEB_AUTH_PASSWORD"
-    fi
+    # 生成 htpasswd 文件
+    htpasswd -bc /etc/nginx/.htpasswd "${WEB_AUTH_USER:-admin}" "$WEB_AUTH_PASSWORD"
     echo "Web 认证已启用 (用户名：${WEB_AUTH_USER:-admin})"
+    # 替换 nginx 配置中的占位符为认证配置
+    sed -i 's/AUTH_BASIC_PLACEHOLDER/auth_basic "Vibe Coding - 请输入密码";\n            auth_basic_user_file \/etc\/nginx\/.htpasswd;/g' /etc/nginx/nginx.conf
 else
     echo "Web 认证未启用 (设置 WEB_AUTH_ENABLED=true 和 WEB_AUTH_PASSWORD 来启用)"
-    # 创建空的 htpasswd 文件避免 nginx 启动失败
-    touch /etc/nginx/.htpasswd
+    # 替换占位符为 auth_basic off
+    sed -i 's/AUTH_BASIC_PLACEHOLDER/auth_basic off;/g' /etc/nginx/nginx.conf
 fi
-
-# 导出环境变量给 nginx 使用
-export WEB_AUTH_ENABLED WEB_AUTH_USER WEB_AUTH_PASSWORD
 
 # 启动 Go server 后台
 /app/vibe-server &
