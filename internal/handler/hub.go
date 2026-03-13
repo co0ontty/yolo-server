@@ -23,8 +23,8 @@ type Handler struct {
 	unregister chan *Client
 
 	// CLI 工作器连接
-	cliWorkers  map[*Client]bool
-	cliRRIndex  int // 轮询索引
+	cliWorkers map[*Client]bool
+	cliRRIndex int // 轮询索引
 }
 
 type Client struct {
@@ -282,6 +282,42 @@ func (h *Handler) Run() {
 			case "stream", "message_complete":
 				// 转发给前端
 				h.sendToFrontends(message)
+
+			case "permission_request":
+				// 权限申请，转发给前端并等待响应
+				h.sendToFrontends(message)
+
+			case "permission_response":
+				// 权限响应，转发给 CLI
+				var permResp model.PermissionResponse
+				if err := json.Unmarshal(msg.Content, &permResp); err != nil {
+					log.Printf("解析权限响应失败：%v", err)
+					continue
+				}
+				// 转发给 CLI 工作器
+				for client := range h.cliWorkers {
+					select {
+					case client.send <- message:
+					default:
+						close(client.send)
+						delete(h.cliWorkers, client)
+					}
+				}
+
+			case "tool_use_request":
+				// 工具调用请求，转发给前端并等待响应
+				h.sendToFrontends(message)
+
+			case "tool_use_response":
+				// 工具调用响应，转发给 CLI
+				for client := range h.cliWorkers {
+					select {
+					case client.send <- message:
+					default:
+						close(client.send)
+						delete(h.cliWorkers, client)
+					}
+				}
 
 			case "sessions":
 				// 发送会话列表给前端

@@ -39,3 +39,35 @@ type StreamResponse struct {
 type MessageComplete struct {
 	SessionID string `json:"session_id"`
 }
+
+// PermissionRequest 表示权限申请请求
+type PermissionRequest struct {
+	SessionID   string `json:"session_id"`
+	RequestID   string `json:"request_id"`
+	Type        string `json:"type"` // file_edit, command_run, bash, etc.
+	Description string `json:"description"`
+	Details     string `json:"details,omitempty"`
+}
+
+// PermissionResponse 表示权限申请响应
+type PermissionResponse struct {
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id"`
+	Granted   bool   `json:"granted"`
+}
+
+// ToolUseRequest 表示工具调用请求
+type ToolUseRequest struct {
+	SessionID   string `json:"session_id"`
+	RequestID   string `json:"request_id"`
+	ToolName    string `json:"tool_name"`
+	Description string `json:"description"`
+	Parameters  string `json:"parameters,omitempty"`
+}
+
+// ToolUseResponse 表示工具调用响应
+type ToolUseResponse struct {
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id"`
+	Approved  bool   `json:"approved"`
+}

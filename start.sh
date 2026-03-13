@@ -1,5 +1,11 @@
 #!/bin/sh
 
+# 检查并生成 SSL 证书（如果不存在）
+if [ ! -f "/app/certs/server.crt" ] || [ ! -f "/app/certs/server.key" ]; then
+    echo "SSL 证书不存在，正在生成自签名证书..."
+    /app/gen-cert.sh
+fi
+
 # 启动 Go server 后台
 /app/vibe-server &
 VIBE_PID=$!

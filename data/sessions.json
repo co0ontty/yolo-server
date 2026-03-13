@@ -1,0 +1,16 @@
+[
+  {
+    "id": "session-1772895763291891703",
+    "directory": "/tmp",
+    "permission": "yolo",
+    "created_at": "2026-03-07T23:02:43.291893867+08:00",
+    "updated_at": "2026-03-07T23:02:43.291893917+08:00"
+  },
+  {
+    "id": "session-1772895899020529484",
+    "directory": "/vol1/1000/yolo-claude/vibe_coding",
+    "permission": "yolo",
+    "created_at": "2026-03-07T23:04:59.020531908+08:00",
+    "updated_at": "2026-03-07T23:04:59.020531958+08:00"
+  }
+]
