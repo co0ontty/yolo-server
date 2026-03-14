@@ -41,7 +41,12 @@ http {
 
         # CLI 下载 (不需要认证，方便远程安装)
         location /cli/ {
-            alias /app/dist/cli/;
+            proxy_pass http://127.0.0.1:3100/cli/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
         }
 
         # SPA fallback - 认证由前端负责
@@ -57,6 +62,9 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header Authorization $http_authorization;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
         }
 
         # WebSocket 代理 - CLI (使用 token 认证)
@@ -67,6 +75,9 @@ http {
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header Authorization $http_authorization;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
         }
 
         # Health check (不需要认证)

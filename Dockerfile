@@ -3,12 +3,15 @@ FROM golang:1.22-alpine AS builder
 
 WORKDIR /build/server
 
+# 安装构建依赖（SQLite 需要 CGO）
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-RUN CGO_ENABLED=0 GOOS=linux go build -o vibe-server ./cmd
+RUN CGO_ENABLED=1 GOOS=linux go build -o vibe-server ./cmd
 
 # 阶段 1b: 构建 CLI worker
 WORKDIR /build/cli
@@ -26,7 +29,7 @@ FROM alpine:3.21
 
 WORKDIR /app
 
-RUN apk --no-cache add ca-certificates nginx apache2-utils
+RUN apk --no-cache add ca-certificates nginx apache2-utils sqlite-libs
 
 # 创建目录结构
 RUN mkdir -p /app/data /app/dist/web /app/dist/cli /app/certs

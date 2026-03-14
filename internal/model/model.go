@@ -15,12 +15,22 @@ type Message struct {
 
 // Session 表示一个工作会话
 type Session struct {
-	ID          string    `json:"id"`
-	Directory   string    `json:"directory"`
-	Permission  string    `json:"permission"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	ClaudeToken string    `json:"claude_token,omitempty"`
+	ID          string           `json:"id"`
+	Directory   string           `json:"directory"`
+	Permission  string           `json:"permission"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+	ClaudeToken string           `json:"claude_token,omitempty"`
+	Messages    []SessionMessage `json:"messages,omitempty"`
+}
+
+type SessionMessage struct {
+	ID         string    `json:"id"`
+	SessionID  string    `json:"session_id"`
+	Role       string    `json:"role"`
+	Content    string    `json:"content"`
+	Time       time.Time `json:"time"`
+	IsComplete bool      `json:"is_complete"`
 }
 
 // ChatRequest 表示前端发送的聊天请求

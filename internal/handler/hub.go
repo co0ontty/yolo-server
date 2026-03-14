@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -130,17 +134,24 @@ func (h *Handler) Run() {
 			} else {
 				h.clients[client] = true
 				log.Println("前端客户端连接成功")
+				log.Println("DEBUG: About to get sessions from store")
 				// 发送当前会话列表
-				if sessions, err := h.store.GetAllSessions(); err == nil {
-					sessionsJSON, _ := json.Marshal(sessions)
-					msg := model.Message{
-						Type:    "sessions",
-						Content: sessionsJSON,
-						Time:    time.Now(),
-					}
-					data, _ := json.Marshal(msg)
-					client.send <- data
+				sessions, err := h.store.GetAllSessions()
+				if err != nil {
+					log.Printf("DEBUG: GetAllSessions error: %v", err)
+				} else {
+					log.Printf("DEBUG: GetAllSessions success, count=%d", len(sessions))
 				}
+				sessionsJSON, _ := json.Marshal(sessions)
+				msg := model.Message{
+					Type:    "sessions",
+					Content: sessionsJSON,
+					Time:    time.Now(),
+				}
+				data, _ := json.Marshal(msg)
+				log.Printf("DEBUG: Sending initial sessions to client.send, len=%d", len(data))
+				client.send <- data
+				log.Println("DEBUG: Sent sessions to client.send")
 				// 发送当前 CLI 状态
 				status := map[string]interface{}{
 					"connected": len(h.cliWorkers) > 0,
@@ -210,45 +221,114 @@ func (h *Handler) Run() {
 				log.Printf("删除会话成功: %s", reqData.SessionID)
 				h.broadcastSessions()
 
-			case "chat":
-				if len(h.cliWorkers) == 0 {
-					log.Println("没有可用的 CLI 工作器")
-					errContent, _ := json.Marshal(map[string]string{
-						"type": "text",
-						"text": "错误：没有可用的 CLI 工作器，请确保 CLI 已启动并连接。",
-					})
-					// 解析 chat 内容获取 session_id
-					var chatReq model.ChatRequest
-					json.Unmarshal(msg.Content, &chatReq)
-					errMsg := model.Message{
-						Type:    "stream",
-						Content: errContent,
-						Session: chatReq.SessionID,
-						Time:    time.Now(),
-					}
-					errData, _ := json.Marshal(errMsg)
-					h.sendToFrontends(errData)
-					// 同时发送 message_complete
-					completeMsg := model.Message{
-						Type:    "message_complete",
-						Session: chatReq.SessionID,
-						Time:    time.Now(),
-					}
-					completeData, _ := json.Marshal(completeMsg)
-					h.sendToFrontends(completeData)
+			case "rename_session":
+				var reqData struct {
+					SessionID string `json:"session_id"`
+					NewName   string `json:"new_name"`
+				}
+				if err := json.Unmarshal(msg.Content, &reqData); err != nil {
+					log.Printf("解析重命名会话请求失败: %v", err)
 					continue
 				}
+				session, err := h.store.GetSession(reqData.SessionID)
+				if err != nil {
+					log.Printf("获取待重命名会话失败: %v", err)
+					continue
+				}
+				session.Directory = strings.TrimSpace(reqData.NewName)
+				if session.Directory == "" {
+					log.Printf("重命名会话失败: 新名称为空")
+					continue
+				}
+				if err := h.store.UpdateSession(reqData.SessionID, *session); err != nil {
+					log.Printf("重命名会话失败: %v", err)
+					continue
+				}
+				log.Printf("重命名会话成功: %s -> %s", reqData.SessionID, session.Directory)
+				h.broadcastSessions()
 
-				// 解析 chat 内容，转换为 execute_task 发给 CLI
+			case "chat":
 				var chatReq model.ChatRequest
 				if err := json.Unmarshal(msg.Content, &chatReq); err != nil {
 					log.Printf("解析聊天请求失败: %v", err)
 					continue
 				}
 
+				if len(h.cliWorkers) == 0 {
+					log.Println("没有可用的 CLI 工作器")
+					_ = h.store.AddMessage(model.SessionMessage{
+						SessionID:  chatReq.SessionID,
+						Role:       "user",
+						Content:    chatReq.Message,
+						Time:       time.Now(),
+						IsComplete: true,
+					})
+					_ = h.store.AddMessage(model.SessionMessage{
+						SessionID:  chatReq.SessionID,
+						Role:       "assistant",
+						Content:    "错误：没有可用的 CLI 工作器，请确保 CLI 已启动并连接。",
+						Time:       time.Now(),
+						IsComplete: true,
+					})
+					h.broadcastSessions()
+					errData, _ := json.Marshal(map[string]interface{}{
+						"type":       "stream",
+						"session_id": chatReq.SessionID,
+						"content": map[string]string{
+							"type": "text",
+							"text": "错误：没有可用的 CLI 工作器，请确保 CLI 已启动并连接。",
+						},
+					})
+					h.sendToFrontends(errData)
+					completeData, _ := json.Marshal(map[string]interface{}{
+						"type":       "message_complete",
+						"session_id": chatReq.SessionID,
+					})
+					h.sendToFrontends(completeData)
+					continue
+				}
+
+				session, err := h.store.GetSession(chatReq.SessionID)
+				if err != nil {
+					log.Printf("获取会话失败: %v", err)
+					errData, _ := json.Marshal(map[string]interface{}{
+						"type":       "stream",
+						"session_id": chatReq.SessionID,
+						"content": map[string]string{
+							"type": "text",
+							"text": "错误：会话不存在或已被删除。",
+						},
+					})
+					h.sendToFrontends(errData)
+					completeData, _ := json.Marshal(map[string]interface{}{
+						"type":       "message_complete",
+						"session_id": chatReq.SessionID,
+					})
+					h.sendToFrontends(completeData)
+					continue
+				}
+
+				_ = h.store.AddMessage(model.SessionMessage{
+					SessionID:  chatReq.SessionID,
+					Role:       "user",
+					Content:    chatReq.Message,
+					Time:       time.Now(),
+					IsComplete: true,
+				})
+				_ = h.store.AddMessage(model.SessionMessage{
+					SessionID:  chatReq.SessionID,
+					Role:       "assistant",
+					Content:    "",
+					Time:       time.Now(),
+					IsComplete: false,
+				})
+				h.broadcastSessions()
+
 				taskContent, _ := json.Marshal(map[string]string{
 					"session_id": chatReq.SessionID,
 					"command":    chatReq.Message,
+					"directory":  session.Directory,
+					"permission": session.Permission,
 				})
 				taskMsg := model.Message{
 					Type:    "execute_task",
@@ -281,6 +361,32 @@ func (h *Handler) Run() {
 				}
 
 			case "stream", "message_complete":
+				if msg.Type == "stream" {
+					var streamData struct {
+						SessionID string `json:"session_id"`
+						Content   struct {
+							Text string `json:"text"`
+						} `json:"content"`
+					}
+					if err := json.Unmarshal(message, &streamData); err == nil && streamData.SessionID != "" && streamData.Content.Text != "" {
+						_ = h.store.AppendToLatestAssistantMessage(streamData.SessionID, streamData.Content.Text)
+					}
+				} else {
+					var completeData struct {
+						SessionID string `json:"session_id"`
+						Session   string `json:"session"`
+					}
+					if err := json.Unmarshal(message, &completeData); err == nil {
+						sessionID := completeData.SessionID
+						if sessionID == "" {
+							sessionID = completeData.Session
+						}
+						if sessionID != "" {
+							_ = h.store.CompleteLatestAssistantMessage(sessionID)
+							h.broadcastSessions()
+						}
+					}
+				}
 				// 转发给前端
 				h.sendToFrontends(message)
 
@@ -389,13 +495,14 @@ func (h *Handler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CLIWebSocketHandler(w http.ResponseWriter, r *http.Request) {
-	// 认证检查（可选，支持 token 认证）
+	// 认证检查（支持 CLI 专用 token）
 	authManager := auth.GetAuthManager()
 	if authManager.IsEnabled() {
 		token := r.URL.Query().Get("token")
 		if token != "" {
-			if session, valid := authManager.Validate(token); valid {
-				log.Printf("CLI 工作器认证成功：用户 %s", session.Username)
+			// 尝试用 CLI token 验证
+			if cliToken, valid := authManager.ValidateCLIToken(token, r.RemoteAddr); valid {
+				log.Printf("CLI 工作器认证成功：%s (最后连接：%s)", cliToken.Name, cliToken.LastAddress)
 			} else {
 				log.Println("CLI 工作器认证失败：无效的 token")
 				http.Error(w, "未授权", http.StatusUnauthorized)
@@ -479,4 +586,61 @@ func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+func (h *Handler) ListDirsHandler(w http.ResponseWriter, r *http.Request) {
+	basePath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if basePath == "" {
+		basePath = "/"
+	}
+
+	lookupDir := basePath
+	prefix := ""
+	if !strings.HasSuffix(basePath, string(os.PathSeparator)) {
+		lookupDir = filepath.Dir(basePath)
+		if lookupDir == "." {
+			lookupDir = "/"
+		}
+		prefix = filepath.Base(basePath)
+	}
+
+	entries, err := os.ReadDir(lookupDir)
+	if err != nil {
+		status := http.StatusBadRequest
+		if os.IsPermission(err) {
+			status = http.StatusForbidden
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"dirs":    []map[string]string{},
+			"message": err.Error(),
+		})
+		return
+	}
+
+	dirs := make([]map[string]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			continue
+		}
+		fullPath := filepath.Join(lookupDir, name)
+		dirs = append(dirs, map[string]string{
+			"name": name,
+			"path": fullPath,
+		})
+	}
+
+	sort.Slice(dirs, func(i, j int) bool {
+		return strings.ToLower(dirs[i]["name"]) < strings.ToLower(dirs[j]["name"])
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"dirs": dirs,
+	})
 }
