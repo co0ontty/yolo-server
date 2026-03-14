@@ -53,11 +53,11 @@ func main() {
 	http.HandleFunc("/api/login", authManager.LoginHandler)
 	http.HandleFunc("/api/logout", authManager.LogoutHandler)
 	http.HandleFunc("/api/check-session", authManager.CheckSessionHandler)
-	http.HandleFunc("/api/get-token", authManager.Middleware(authManager.GetTokenHandler))
-	http.HandleFunc("/api/list-dirs", authManager.Middleware(h.ListDirsHandler))
+	http.Handle("/api/get-token", authManager.Middleware(http.HandlerFunc(authManager.GetTokenHandler)))
+	http.Handle("/api/list-dirs", authManager.Middleware(http.HandlerFunc(h.ListDirsHandler)))
 
 	// CLI Token 管理 API
-	http.HandleFunc("/api/cli-tokens", authManager.Middleware(func(w http.ResponseWriter, r *http.Request) {
+	http.Handle("/api/cli-tokens", authManager.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			authManager.ListCLITokensHandler(w, r)
@@ -68,13 +68,11 @@ func main() {
 		default:
 			http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
 		}
-	}))
+	})))
 
 	// 提供静态文件（前端）- 需要认证
-	http.Handle("/", authManager.Middleware(func(w http.ResponseWriter, r *http.Request) {
-		fs := http.FileServer(http.Dir("dist/web"))
-		fs.ServeHTTP(w, r)
-	}))
+	webFS := http.FileServer(http.Dir("dist/web"))
+	http.Handle("/", authManager.Middleware(webFS))
 
 	// 提供 CLI 下载和安装脚本 - 不需要认证，方便远程安装
 	cliFS := http.StripPrefix("/cli/", http.FileServer(http.Dir("dist/cli")))

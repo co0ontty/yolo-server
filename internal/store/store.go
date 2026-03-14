@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,10 +29,9 @@ func NewSessionStore(filePath string) *SessionStore {
 		filePath: filePath,
 	}
 	store.backend = detectBackend(filePath)
-	fmt.Printf("DEBUG: SessionStore backend: %s, filePath: %s\n", store.backend, store.filePath)
 	if store.backend == "sqlite" {
 		if err := store.initSQLite(); err != nil {
-			fmt.Printf("初始化 SQLite 会话存储失败: %v\n", err)
+			log.Printf("初始化 SQLite 会话存储失败: %v", err)
 			store.backend = "json"
 			store.db = nil
 			if strings.HasSuffix(strings.ToLower(store.filePath), ".db") || strings.HasSuffix(strings.ToLower(store.filePath), ".sqlite") || strings.HasSuffix(strings.ToLower(store.filePath), ".sqlite3") {
@@ -184,7 +184,7 @@ func (s *SessionStore) loadJSON() {
 	defer s.mu.Unlock()
 
 	if err := os.MkdirAll(filepath.Dir(s.filePath), 0755); err != nil {
-		fmt.Printf("无法创建会话目录: %v", err)
+		log.Printf("无法创建会话目录: %v", err)
 		return
 	}
 
@@ -195,19 +195,19 @@ func (s *SessionStore) loadJSON() {
 			s.saveJSON()
 			return
 		}
-		fmt.Printf("无法打开会话文件: %v", err)
+		log.Printf("无法打开会话文件: %v", err)
 		return
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		fmt.Printf("无法读取会话文件: %v", err)
+		log.Printf("无法读取会话文件: %v", err)
 		return
 	}
 
 	if err := json.Unmarshal(data, &s.sessions); err != nil {
-		fmt.Printf("无法解析会话数据: %v", err)
+		log.Printf("无法解析会话数据: %v", err)
 		s.sessions = []model.Session{}
 		return
 	}
@@ -216,19 +216,18 @@ func (s *SessionStore) loadJSON() {
 func (s *SessionStore) saveJSON() {
 	data, err := json.MarshalIndent(s.sessions, "", "  ")
 	if err != nil {
-		fmt.Printf("无法序列化会话数据: %v", err)
+		log.Printf("无法序列化会话数据: %v", err)
 		return
 	}
 
 	if err := os.WriteFile(s.filePath, data, 0644); err != nil {
-		fmt.Printf("无法保存会话数据: %v", err)
+		log.Printf("无法保存会话数据: %v", err)
 	}
 }
 
 func (s *SessionStore) GetAllSessions() ([]model.Session, error) {
-	fmt.Printf("DEBUG: GetAllSessions called, backend=%s\n", s.backend)
 	if s.backend == "sqlite" {
-		fmt.Println("DEBUG: Querying SQLite database")
+		// Load all sessions
 		rows, err := s.db.Query(`
 			SELECT id, directory, permission, created_at, updated_at, claude_token
 			FROM sessions
@@ -240,19 +239,42 @@ func (s *SessionStore) GetAllSessions() ([]model.Session, error) {
 		defer rows.Close()
 
 		sessions := make([]model.Session, 0)
+		sessionMap := make(map[string]*model.Session)
+
 		for rows.Next() {
 			var session model.Session
 			if err := rows.Scan(&session.ID, &session.Directory, &session.Permission, &session.CreatedAt, &session.UpdatedAt, &session.ClaudeToken); err != nil {
 				return nil, err
 			}
-			messages, err := s.getMessagesBySessionSQLite(session.ID)
-			if err != nil {
+			session.Messages = []model.SessionMessage{}
+			sessions = append(sessions, session)
+			sessionMap[session.ID] = &sessions[len(sessions)-1]
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+
+		// Load all messages in a single query
+		msgRows, err := s.db.Query(`
+			SELECT id, session_id, role, content, time, is_complete
+			FROM messages
+			ORDER BY time ASC, id ASC
+		`)
+		if err != nil {
+			return nil, err
+		}
+		defer msgRows.Close()
+
+		for msgRows.Next() {
+			var msg model.SessionMessage
+			if err := msgRows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.Time, &msg.IsComplete); err != nil {
 				return nil, err
 			}
-			session.Messages = messages
-			sessions = append(sessions, session)
+			if session, ok := sessionMap[msg.SessionID]; ok {
+				session.Messages = append(session.Messages, msg)
+			}
 		}
-		return sessions, rows.Err()
+		return sessions, msgRows.Err()
 	}
 
 	s.mu.RLock()

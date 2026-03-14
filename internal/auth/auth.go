@@ -342,26 +342,19 @@ type CheckSessionResponse struct {
 }
 
 // Middleware 返回认证中间件
-func (a *AuthManager) Middleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (a *AuthManager) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.enabled {
-			next(w, r)
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
+		token := extractBearerToken(r)
+		if token == "" {
 			cookie, err := r.Cookie("auth_token")
-			if err != nil {
-				http.Error(w, "未授权", http.StatusUnauthorized)
-				return
+			if err == nil {
+				token = cookie.Value
 			}
-			authHeader = "Bearer " + cookie.Value
-		}
-
-		var token string
-		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-			token = authHeader[7:]
 		}
 
 		if token == "" {
@@ -375,8 +368,17 @@ func (a *AuthManager) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		next(w, r)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// extractBearerToken 从请求中提取 Bearer token
+func extractBearerToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		return authHeader[7:]
 	}
+	return ""
 }
 
 // LoginHandler 处理登录请求
@@ -430,12 +432,7 @@ func (a *AuthManager) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	var token string
-	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		token = authHeader[7:]
-	}
-
+	token := extractBearerToken(r)
 	if token != "" {
 		a.Logout(token)
 	}
@@ -448,11 +445,7 @@ func (a *AuthManager) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 
 // CheckSessionHandler 检查会话状态
 func (a *AuthManager) CheckSessionHandler(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	var token string
-	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		token = authHeader[7:]
-	}
+	token := extractBearerToken(r)
 
 	response := CheckSessionResponse{
 		Authenticated: false,
@@ -488,11 +481,7 @@ func (a *AuthManager) GetTokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	var token string
-	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		token = authHeader[7:]
-	}
+	token := extractBearerToken(r)
 
 	if !a.enabled {
 		w.Header().Set("Content-Type", "application/json")

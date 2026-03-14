@@ -134,13 +134,10 @@ func (h *Handler) Run() {
 			} else {
 				h.clients[client] = true
 				log.Println("前端客户端连接成功")
-				log.Println("DEBUG: About to get sessions from store")
 				// 发送当前会话列表
 				sessions, err := h.store.GetAllSessions()
 				if err != nil {
-					log.Printf("DEBUG: GetAllSessions error: %v", err)
-				} else {
-					log.Printf("DEBUG: GetAllSessions success, count=%d", len(sessions))
+					log.Printf("获取会话列表失败: %v", err)
 				}
 				sessionsJSON, _ := json.Marshal(sessions)
 				msg := model.Message{
@@ -149,9 +146,7 @@ func (h *Handler) Run() {
 					Time:    time.Now(),
 				}
 				data, _ := json.Marshal(msg)
-				log.Printf("DEBUG: Sending initial sessions to client.send, len=%d", len(data))
 				client.send <- data
-				log.Println("DEBUG: Sent sessions to client.send")
 				// 发送当前 CLI 状态
 				status := map[string]interface{}{
 					"connected": len(h.cliWorkers) > 0,
@@ -463,20 +458,19 @@ func (h *Handler) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				token = cookie.Value
 			}
 		}
-		if token != "" {
-			// 验证 token，支持 URL 参数中的 token 参数（用于 WebSocket）
-			if session, valid := authManager.Validate(token); !valid {
-				log.Println("WebSocket 认证失败：无效的 token")
-				http.Error(w, "未授权", http.StatusUnauthorized)
-				return
-			} else {
-				userID = session.Username
-			}
-		} else {
+		if token == "" {
 			log.Println("WebSocket 连接未提供认证 token")
 			http.Error(w, "未授权", http.StatusUnauthorized)
 			return
 		}
+		// 验证 token
+		session, valid := authManager.Validate(token)
+		if !valid {
+			log.Println("WebSocket 认证失败：无效的 token")
+			http.Error(w, "未授权", http.StatusUnauthorized)
+			return
+		}
+		userID = session.Username
 	} else {
 		userID = "web"
 	}
