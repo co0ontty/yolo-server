@@ -360,7 +360,8 @@ func (h *Handler) Run() {
 					var streamData struct {
 						SessionID string `json:"session_id"`
 						Content   struct {
-							Text string `json:"text"`
+							Type string `json:"type"`
+						Text string `json:"text"`
 						} `json:"content"`
 					}
 					if err := json.Unmarshal(message, &streamData); err == nil && streamData.SessionID != "" && streamData.Content.Text != "" {
@@ -407,7 +408,15 @@ func (h *Handler) Run() {
 				}
 
 			case "tool_use_request":
-				// 工具调用请求，转发给前端并等待响应
+				// 工具调用请求，转发给前端
+				h.sendToFrontends(message)
+
+			case "tool_result":
+				// 工具调用结果，转发给前端
+				h.sendToFrontends(message)
+
+			case "block_start", "block_stop":
+				// 内容块开始/结束，转发给前端
 				h.sendToFrontends(message)
 
 			case "tool_use_response":
