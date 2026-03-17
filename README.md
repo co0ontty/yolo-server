@@ -25,9 +25,9 @@ npm run build
 ### 2. 启动 Go server
 ```bash
 cd server
-go run cmd/main.go  # 监听 3100 端口
-# 或指定端口
-go run cmd/main.go -port 8080
+go run cmd/main.go  # 默认监听 3100 端口
+# 或通过环境变量指定端口
+PORT=8080 go run cmd/main.go
 ```
 
 ### 3. 配置 nginx
@@ -53,7 +53,7 @@ nginx -t && nginx -s reload
 ```bash
 cd cli
 go build -o vibe-cli ./cmd
-./vibe-cli -server ws://localhost:3100/ws/cli
+VIBE_SERVER=http://localhost:3100 ./vibe-cli
 ```
 
 可以运行多个 CLI worker 并行处理任务。

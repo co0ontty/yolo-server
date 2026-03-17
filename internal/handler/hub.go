@@ -30,6 +30,7 @@ type Handler struct {
 	// CLI 工作器连接
 	cliWorkers map[*Client]bool
 	cliRRIndex int // 轮询索引
+	sessionCLI map[string]*Client
 }
 
 type Client struct {
@@ -46,6 +47,7 @@ func NewHandler(filePath string) *Handler {
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		cliWorkers: make(map[*Client]bool),
+		sessionCLI: make(map[string]*Client),
 	}
 }
 
@@ -123,6 +125,19 @@ func (h *Handler) pickCLIWorker() *Client {
 	return picked
 }
 
+func (h *Handler) getCLIWorkerForSession(sessionID string) *Client {
+	if sessionID != "" {
+		if worker, ok := h.sessionCLI[sessionID]; ok && h.cliWorkers[worker] {
+			return worker
+		}
+	}
+	worker := h.pickCLIWorker()
+	if worker != nil && sessionID != "" {
+		h.sessionCLI[sessionID] = worker
+	}
+	return worker
+}
+
 func (h *Handler) Run() {
 	for {
 		select {
@@ -164,6 +179,11 @@ func (h *Handler) Run() {
 		case client := <-h.unregister:
 			if client.userID == "cli" {
 				delete(h.cliWorkers, client)
+				for sessionID, worker := range h.sessionCLI {
+					if worker == client {
+						delete(h.sessionCLI, sessionID)
+					}
+				}
 				log.Printf("CLI 工作器断开连接 (剩余 %d 个)", len(h.cliWorkers))
 				close(client.send)
 				h.broadcastCLIStatus()
@@ -334,24 +354,30 @@ func (h *Handler) Run() {
 				taskData, _ := json.Marshal(taskMsg)
 
 				// 轮询选择一个 CLI 工作器执行任务
-				worker := h.pickCLIWorker()
+				worker := h.getCLIWorkerForSession(chatReq.SessionID)
 				if worker != nil {
 					select {
 					case worker.send <- taskData:
 					default:
 						close(worker.send)
 						delete(h.cliWorkers, worker)
+						delete(h.sessionCLI, chatReq.SessionID)
 					}
 				}
 
 			case "stop":
-				// 转发 stop 给 CLI 工作器
-				for client := range h.cliWorkers {
+				var req struct {
+					SessionID string `json:"session_id"`
+				}
+				_ = json.Unmarshal(msg.Content, &req)
+				client := h.getCLIWorkerForSession(req.SessionID)
+				if client != nil {
 					select {
 					case client.send <- message:
 					default:
 						close(client.send)
 						delete(h.cliWorkers, client)
+						delete(h.sessionCLI, req.SessionID)
 					}
 				}
 
@@ -361,7 +387,7 @@ func (h *Handler) Run() {
 						SessionID string `json:"session_id"`
 						Content   struct {
 							Type string `json:"type"`
-						Text string `json:"text"`
+							Text string `json:"text"`
 						} `json:"content"`
 					}
 					if err := json.Unmarshal(message, &streamData); err == nil && streamData.SessionID != "" && streamData.Content.Text != "" {
@@ -397,13 +423,30 @@ func (h *Handler) Run() {
 					log.Printf("解析权限响应失败：%v", err)
 					continue
 				}
-				// 转发给 CLI 工作器
-				for client := range h.cliWorkers {
+				client := h.getCLIWorkerForSession(permResp.SessionID)
+				if client != nil {
 					select {
 					case client.send <- message:
 					default:
 						close(client.send)
 						delete(h.cliWorkers, client)
+						delete(h.sessionCLI, permResp.SessionID)
+					}
+				}
+
+			case "session_input":
+				var req struct {
+					SessionID string `json:"session_id"`
+				}
+				_ = json.Unmarshal(msg.Content, &req)
+				client := h.getCLIWorkerForSession(req.SessionID)
+				if client != nil {
+					select {
+					case client.send <- message:
+					default:
+						close(client.send)
+						delete(h.cliWorkers, client)
+						delete(h.sessionCLI, req.SessionID)
 					}
 				}
 
@@ -415,18 +458,26 @@ func (h *Handler) Run() {
 				// 工具调用结果，转发给前端
 				h.sendToFrontends(message)
 
+			case "raw_event":
+				h.sendToFrontends(message)
+
 			case "block_start", "block_stop":
 				// 内容块开始/结束，转发给前端
 				h.sendToFrontends(message)
 
 			case "tool_use_response":
-				// 工具调用响应，转发给 CLI
-				for client := range h.cliWorkers {
+				var req struct {
+					SessionID string `json:"session_id"`
+				}
+				_ = json.Unmarshal(msg.Content, &req)
+				client := h.getCLIWorkerForSession(req.SessionID)
+				if client != nil {
 					select {
 					case client.send <- message:
 					default:
 						close(client.send)
 						delete(h.cliWorkers, client)
+						delete(h.sessionCLI, req.SessionID)
 					}
 				}
 
